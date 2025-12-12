@@ -1,6 +1,7 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import yt_dlp
 import os
+import requests
 
 app = Flask(__name__)
 
@@ -9,7 +10,7 @@ def index():
     return render_template('index.html')
 
 @app.route('/download', methods=['POST'])
-def download_video():
+def get_video_info():
     data = request.json
     url = data.get('url')
 
@@ -17,9 +18,9 @@ def download_video():
         return jsonify({'error': 'No URL provided'}), 400
 
     try:
-        # Remove 'format': 'best' to allow fallback to any available stream
+        # Prefer mp4 for better compatibility and easier direct downloads
         ydl_opts = {
-            'cookiesfrombrowser': None, # Ensure no browser cookies are tried on server
+            'format': 'best[ext=mp4]/best',
             'quiet': True,
             'no_warnings': True,
         }
@@ -27,8 +28,8 @@ def download_video():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             video_url = info.get('url')
+            # Fallback logic if url is not at top level
             if not video_url:
-                 # Start looking for requested formats if 'url' not in info
                 for f in info.get('formats', []):
                     if f.get('url'):
                         video_url = f['url']
@@ -46,16 +47,34 @@ def download_video():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    # Optional: Start ngrok to share with friends
+@app.route('/download_proxy')
+def download_proxy():
+    video_url = request.args.get('url')
+    title = request.args.get('title', 'pinterest_video')
+    
+    if not video_url:
+        return "Missing URL", 400
+        
     try:
-        from pyngrok import ngrok
-        # Open a HTTP tunnel on the default port 5000
-        public_url = ngrok.connect(5000).public_url
-        print(f" * Public URL to share with friends: {public_url}")
-    except ImportError:
-        print(" * pyngrok not installed, skipping public URL generation.")
-    except Exception as e:
-        print(f" * Could not start ngrok: {e}")
+        # Stream the file from the remote URL to the client
+        req = requests.get(video_url, stream=True)
+        req.raise_for_status()
+        
+        # Sanitize title for filename
+        safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ']).strip()
+        if not safe_title:
+            safe_title = "pinterest_video"
+        filename = f"{safe_title}.mp4"
 
-    app.run(debug=True, port=5000)
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': req.headers.get('Content-Type', 'video/mp4')
+        }
+        
+        return Response(stream_with_context(req.iter_content(chunk_size=4096)), headers=headers)
+        
+    except Exception as e:
+        return f"Error downloading file: {str(e)}", 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
