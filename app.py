@@ -17,8 +17,9 @@ def download_video():
         return jsonify({'error': 'No URL provided'}), 400
 
     try:
+        # Remove 'format': 'best' to allow fallback to any available stream
         ydl_opts = {
-            'format': 'best',
+            'cookiesfrombrowser': None, # Ensure no browser cookies are tried on server
             'quiet': True,
             'no_warnings': True,
         }
